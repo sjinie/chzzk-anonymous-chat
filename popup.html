@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>치지직 익명 채팅</title><link rel="stylesheet" href="popup.css"></head>
+<body>
+  <header><h1>익명 채팅</h1><span class="version">v1.2.0</span></header>
+  <p class="intro">활동 제한 감지 시 자동으로 켜집니다.<br>일반 방송에는 페이지 버튼을 표시하지 않습니다.</p>
+  <section class="state" aria-label="현재 방송 상태"><p id="status" role="status" aria-live="polite">현재 방송 확인 중…</p><p id="detail"></p></section>
+  <div class="controls"><button id="enable" disabled>익명 채팅 켜기</button><button id="disable" disabled>끄기</button></div>
+  <button id="auto" class="secondary" disabled>자동 감지로 돌아가기</button>
+  <p id="error" role="alert" hidden></p>
+  <footer>설정은 현재 탭의 방송에만 적용됩니다.<br>새로고침하면 자동 감지 상태로 돌아갑니다.</footer>
+  <script src="popup.js" type="module"></script>
+</body></html>

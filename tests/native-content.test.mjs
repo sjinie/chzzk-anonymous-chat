@@ -53,6 +53,7 @@ class FakeElement {
     return root;
   }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  getAttribute(name) { return this.attributes.get(name) ?? null; }
   hasAttribute(name) { return this.attributes.has(name); }
   addEventListener(type, listener) {
     if (!this.listeners.has(type)) this.listeners.set(type, []);
@@ -69,7 +70,8 @@ class FakeElement {
       for (const child of node.children) {
         if (selector === 'button' && child.tagName === 'button') all.push(child);
         if (selector === 'option' && child.tagName === 'option') all.push(child);
-        if (selector === 'h2,h3,[role="heading"]' && ['h2', 'h3'].includes(child.tagName)) all.push(child);
+        if (selector === 'h2,h3,[role="heading"]' && (['h2', 'h3'].includes(child.tagName) || child.getAttribute('role') === 'heading')) all.push(child);
+        if (selector === '[role="log"]' && child.getAttribute('role') === 'log') all.push(child);
         visit(child);
       }
     };
@@ -128,7 +130,7 @@ function makePage({supported = true, pathname = `/live/${channelId}`, subframe =
       if (!env.aside) return [];
       if (selector === 'aside') return env.aside.tagName === 'aside' ? [env.aside] : [];
       if (selector === 'aside, [role="complementary"]') {
-        return env.aside.tagName === 'aside' || env.aside.getAttribute?.('role') === 'complementary' ? [env.aside] : [];
+        return env.aside.tagName === 'aside' || env.aside.getAttribute('role') === 'complementary' ? [env.aside] : [];
       }
       return [];
     },
@@ -189,7 +191,18 @@ function makePage({supported = true, pathname = `/live/${channelId}`, subframe =
     disconnect() { this.disconnected = true; this.observed.clear(); }
     trigger() { if (!this.disconnected) this.callback([]); }
   }
-  const chrome = {runtime: {getURL: path => `chrome-extension://test-extension/${path}`}};
+  const runtimeListeners = [];
+  const chrome = {runtime: {
+    id: 'test-extension',
+    getURL: path => `chrome-extension://test-extension/${path}`,
+    onMessage: {
+      addListener(listener) { runtimeListeners.push(listener); },
+      removeListener(listener) {
+        const index = runtimeListeners.indexOf(listener);
+        if (index !== -1) runtimeListeners.splice(index, 1);
+      }
+    }
+  }};
   const context = {
     window, document, location: {pathname}, HTMLIFrameElement, MutationObserver, ResizeObserver, chrome,
     innerWidth: 1280, innerHeight: 800,
@@ -204,6 +217,15 @@ function makePage({supported = true, pathname = `/live/${channelId}`, subframe =
     env.timeouts.clear();
     for (const callback of callbacks) callback();
   };
+  env.runtimeListeners = runtimeListeners;
+  env.popupSender = {id: chrome.runtime.id, url: chrome.runtime.getURL('popup.html')};
+  env.sendControl = (action, overrides = {}) => {
+    const message = {type: 'reader-control', action, ...(action === 'status' ? {} : {channelId}), ...overrides.message};
+    let response;
+    const sender = {...env.popupSender, ...overrides.sender};
+    const accepted = runtimeListeners[0]?.(message, sender, value => { response = value; });
+    return {accepted, response};
+  };
   env.documentListeners = documentListeners;
   env.windowListeners = windowListeners;
   env.visualViewportListeners = visualViewportListeners;
@@ -214,6 +236,7 @@ function makePage({supported = true, pathname = `/live/${channelId}`, subframe =
   env.getRoot = () => env.getHost()?.shadowRoot;
   env.getFrame = () => env.iframes.at(-1);
   env.getButtons = () => env.getRoot()?.querySelectorAll('button') || [];
+  env.enableReader = () => env.sendControl('enable').response;
   env.setAside = (rect, text = '') => {
     const aside = new FakeElement('aside', env);
     aside.rect = rect;
@@ -236,6 +259,8 @@ function panelRect(env) {
   return {left, top, right: left + width, bottom: top + height, width, height};
 }
 
+function plain(value) { return JSON.parse(JSON.stringify(value)); }
+
 function assertInside(rect, bounds, label) {
   assert.ok(rect.left >= bounds.left - 0.01, `${label}: left ${rect.left} is before ${bounds.left}`);
   assert.ok(rect.top >= bounds.top - 0.01, `${label}: top ${rect.top} is before ${bounds.top}`);
@@ -243,15 +268,105 @@ function assertInside(rect, bounds, label) {
   assert.ok(rect.bottom <= bounds.bottom + 0.01, `${label}: bottom ${rect.bottom} is after ${bounds.bottom}`);
 }
 
-test('supported browser defaults to native CHZZK chat and sets credentialless before src and append', () => {
+test('unrestricted live page has no injected host, panel, or button by default', () => {
   const env = makePage();
+  assert.equal(env.getHost(), undefined);
+  assert.deepEqual(env.getButtons(), []);
+  const {response} = env.sendControl('status');
+  assert.deepEqual(plain(response), {
+    ok: true, supported: true, channelId, restricted: false, enabled: false,
+    control: 'auto', mode: 'native', nativeSupported: true
+  });
+});
+
+test('restricted chat guidance automatically activates the anonymous reader', () => {
+  const env = makePage();
+  assert.equal(env.getHost(), undefined);
+  const aside = env.setAside({left: 800, top: 100, right: 1200, bottom: 700, width: 400, height: 600}, '채팅에 참여할 수 없습니다.');
+  env.mutationObserver().trigger();
+  env.flushTimeouts();
+
+  const {response} = env.sendControl('status');
+  assert.equal(response.restricted, true);
+  assert.equal(response.enabled, true);
+  assert.equal(response.control, 'auto');
+  assert.ok(env.getHost(), 'restricted broadcasts should automatically mount the reader UI');
+  assert.equal(env.getRoot().querySelector('#panel').hidden, false);
+  assert.equal(env.resizeObserver().observed.has(aside), true);
+});
+
+test('activity-ban text inside ordinary live chat log does not trigger automatic activation', () => {
+  const env = makePage();
+  const aside = env.setAside({left: 800, top: 100, right: 1200, bottom: 700, width: 400, height: 600});
+  const log = new FakeElement('div', env);
+  log.setAttribute('role', 'log');
+  log.textContent = '이 방송은 활동 제한 안내가 아니라 일반 시청자 메시지입니다.';
+  aside.append(log);
+  env.mutationObserver().trigger();
+  env.flushTimeouts();
+
+  const {response} = env.sendControl('status');
+  assert.equal(response.restricted, false);
+  assert.equal(response.enabled, false);
+  assert.equal(response.control, 'auto');
+  assert.equal(env.getHost(), undefined, 'ordinary chat messages must not mount a reader on unrestricted broadcasts');
+});
+
+test('popup status, enable, disable, and auto controls update only the current channel', () => {
+  const env = makePage();
+  assert.equal(env.sendControl('status').response.enabled, false);
+  assert.equal(env.sendControl('enable').response.enabled, true);
+  assert.equal(env.sendControl('enable').response.control, 'manual');
+  assert.ok(env.getHost());
+  assert.equal(env.sendControl('disable').response.enabled, false);
+  assert.equal(env.sendControl('disable').response.control, 'manual');
+  assert.equal(env.getRoot().querySelector('#panel').hidden, true);
+  assert.equal(env.sendControl('auto').response.enabled, false);
+  assert.equal(env.sendControl('auto').response.control, 'auto');
+  assert.equal(env.getRoot().querySelector('#panel').hidden, true, 'automatic mode should leave the panel hidden on an unrestricted broadcast');
+  assert.equal(env.getFrame().isConnected, false, 'automatic mode should leave no live frame on an unrestricted broadcast');
+});
+
+test('content controls reject unauthorized senders without changing page state', () => {
+  const env = makePage();
+  const wrongExtension = env.sendControl('enable', {sender: {id: 'other-extension'}});
+  assert.equal(wrongExtension.accepted, false);
+  assert.equal(wrongExtension.response, undefined);
+  const wrongPage = env.sendControl('enable', {sender: {url: 'https://chzzk.naver.com/popup.html'}});
+  assert.equal(wrongPage.accepted, false);
+  assert.equal(wrongPage.response, undefined);
+  assert.equal(env.getHost(), undefined);
+});
+
+test('content controls reject stale channel ids without enabling the reader', () => {
+  const env = makePage();
+  const {accepted, response} = env.sendControl('enable', {message: {channelId: '00000000000000000000000000000000'}});
+  assert.equal(accepted, false);
+  assert.deepEqual(plain(response), {ok: false, error: '방송이 변경되었습니다. 팝업을 다시 열어 주세요.'});
+  assert.equal(env.getHost(), undefined);
+  assert.equal(env.sendControl('status').response.enabled, false);
+});
+
+test('manifest keeps tab and cookie permissions absent and opens the popup from the action', async () => {
+  const manifest = JSON.parse(await fs.readFile(new URL('../manifest.json', import.meta.url), 'utf8'));
+  const permissions = [...(manifest.permissions || []), ...(manifest.optional_permissions || [])];
+  assert.equal(permissions.includes('tabs'), false);
+  assert.equal(permissions.includes('cookies'), false);
+  assert.equal(manifest.action?.default_popup, 'popup.html');
+});
+
+test('popup enable opens native CHZZK chat and sets credentialless before src and append', () => {
+  const env = makePage();
+  assert.equal(env.getRoot(), undefined, 'unrestricted pages should not mount UI before popup control');
+  assert.deepEqual(plain(env.enableReader()), {
+    ok: true, supported: true, channelId, restricted: false, enabled: true,
+    control: 'manual', mode: 'native', nativeSupported: true
+  });
   const root = env.getRoot();
-  assert.ok(root, 'content UI should be mounted on the live page');
   const select = root.querySelector('#mode');
   assert.equal(select.value, 'native');
   assert.equal(select.querySelectorAll('option').find(option => option.value === 'native')?.disabled, false);
 
-  root.querySelector('#toggle').click();
   const frame = env.getFrame();
   assert.equal(frame.credentialless, true);
   assert.equal(frame.src, `https://chzzk.naver.com/live/${channelId}/chat`);
@@ -262,15 +377,15 @@ test('supported browser defaults to native CHZZK chat and sets credentialless be
     `expected credentialless -> src -> append ordering, got ${env.events.join(' | ')}`);
 });
 
-test('unsupported browser defaults to the simple extension viewer', () => {
+test('popup enable uses the simple extension viewer when credentialless is unsupported', () => {
   const env = makePage({supported: false});
+  assert.equal(env.getRoot(), undefined, 'unrestricted pages should not mount UI before popup control');
+  env.enableReader();
   const root = env.getRoot();
-  assert.ok(root);
   const select = root.querySelector('#mode');
   assert.equal(select.value, 'simple');
   assert.equal(select.querySelectorAll('option').find(option => option.value === 'native')?.disabled, true);
 
-  root.querySelector('#toggle').click();
   assert.equal(env.getFrame().src, `chrome-extension://test-extension/viewer.html?channel=${channelId}`);
   assert.equal(env.events.some(event => event.startsWith('credentialless:')), false);
 });
@@ -281,7 +396,7 @@ test('fallback panel stays inside compact and wide viewports', async t => {
       const env = makePage();
       env.context.innerWidth = width;
       env.context.innerHeight = height;
-      env.getRoot().querySelector('#toggle').click();
+      env.enableReader();
       assertInside(panelRect(env), {left: 0, top: 0, right: width, bottom: height}, `${width}x${height}`);
       env.context.__chzzkAnonymousReader.dispose();
     });
@@ -296,14 +411,14 @@ test('an existing aside is clipped to the viewport edges', () => {
   env.mutationObserver().trigger();
   env.flushTimeouts();
   assert.equal(env.resizeObserver().observed.has(aside), true);
-  env.getRoot().querySelector('#toggle').click();
+  env.enableReader();
   assert.deepEqual(panelRect(env), {left: 0, top: 0, right: 320, bottom: 240, width: 320, height: 240});
   env.context.__chzzkAnonymousReader.dispose();
 });
 
 test('window resize and visualViewport resize/offset events relayout the panel', () => {
   const env = makePage();
-  env.getRoot().querySelector('#toggle').click();
+  env.enableReader();
   const initial = panelRect(env);
 
   env.context.innerWidth = 640;
@@ -330,6 +445,7 @@ test('window resize and visualViewport resize/offset events relayout the panel',
 
 test('ResizeObserver watches the original aside and toolbar and is disconnected on dispose', () => {
   const env = makePage();
+  env.enableReader();
   const resizeObserver = env.resizeObserver();
   const bar = env.getRoot().querySelector('#bar');
   assert.ok(resizeObserver);
@@ -347,7 +463,7 @@ test('ResizeObserver watches the original aside and toolbar and is disconnected 
 
 test('native iframe load installs bounded fit styles without overriding native log scrolling', () => {
   const env = makePage();
-  env.getRoot().querySelector('#toggle').click();
+  env.enableReader();
   const frame = env.getFrame();
   assert.equal(frame.contentDocument.getElementById('chzzk-anonymous-reader-fit'), null);
 
@@ -377,8 +493,8 @@ test('native iframe load installs bounded fit styles without overriding native l
 
 test('switching modes removes the old iframe before creating the replacement', () => {
   const env = makePage();
+  env.enableReader();
   const root = env.getRoot();
-  root.querySelector('#toggle').click();
   const nativeFrame = env.getFrame();
   assert.equal(nativeFrame.isConnected, true);
 
@@ -411,11 +527,10 @@ test('content script exits in a subframe', () => {
   assert.equal(env.context.__chzzkAnonymousReader, undefined);
 });
 
-test('close removes the iframe, toggle reopens it, and dispose cleans up listeners and timers', () => {
+test('native close removes the iframe, popup enable reopens it, and dispose cleans up listeners and timers', () => {
   const env = makePage();
+  env.enableReader();
   const root = env.getRoot();
-  const toggle = root.querySelector('#toggle');
-  toggle.click();
   const firstFrame = env.getFrame();
   assert.equal(firstFrame.isConnected, true);
 
@@ -424,9 +539,8 @@ test('close removes the iframe, toggle reopens it, and dispose cleans up listene
   close.click();
   assert.equal(firstFrame.isConnected, false);
   assert.equal(root.querySelector('#panel').hidden, true);
-  assert.equal(toggle.hidden, false);
 
-  toggle.click();
+  env.enableReader();
   const reopenedFrame = env.getFrame();
   assert.notEqual(reopenedFrame, firstFrame);
   assert.equal(reopenedFrame.isConnected, true);
@@ -449,7 +563,7 @@ test('close removes the iframe, toggle reopens it, and dispose cleans up listene
 
 test('route change tears down the native iframe and hides the injected UI', () => {
   const env = makePage();
-  env.getRoot().querySelector('#toggle').click();
+  env.enableReader();
   const frame = env.getFrame();
   env.context.location.pathname = '/';
   env.mutationObserver().trigger();

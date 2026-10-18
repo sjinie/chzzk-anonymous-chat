@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "치지직 익명 채팅 뷰어",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "minimum_chrome_version": "120",
   "description": "로그인은 유지하고 치지직 기본 채팅창을 익명으로 봅니다. 닉네임 정보 카드 지원, 간단 채팅 대체 모드 제공.",
   "permissions": [
@@ -43,5 +43,9 @@
   ],
   "content_security_policy": {
     "extension_pages": "default-src 'self'; script-src 'self'; style-src 'self'; img-src https://ssl.pstatic.net https://nng-phinf.pstatic.net; connect-src https://api.chzzk.naver.com https://comm-api.game.naver.com wss://*.chat.naver.com; object-src 'none'; base-uri 'none'"
+  },
+  "action": {
+    "default_title": "치지직 익명 채팅",
+    "default_popup": "popup.html"
   }
 }
