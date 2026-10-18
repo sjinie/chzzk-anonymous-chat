@@ -1,25 +1,39 @@
 (() => {
   'use strict';
-  if (globalThis.__chzzkAnonymousReader) return;
-  globalThis.__chzzkAnonymousReader = true;
-  const choices = new Map();
-  let channel = '', frame, aside, host, root, button, panel, timer;
+  // Do not run in popup chats or subframes, including our native chat iframe.
+  if (window.top !== window || globalThis.__chzzkAnonymousReader) return;
+  if (/^\/live\/[a-f0-9]{32}\/chat\/?$/.test(location.pathname)) return;
+  const lifecycle = globalThis.__chzzkAnonymousReader = {};
+  const choices = new Map(), modes = new Map();
+  const nativeSupported = 'credentialless' in HTMLIFrameElement.prototype;
+  let channel = '', frame, aside, host, root, button, panel, select, timer, frameMode = '';
   function channelFromURL() {
-    return location.pathname.match(/^\/live\/([a-f0-9]{32})(?:\/|$)/)?.[1] || '';
+    return location.pathname.match(/^\/live\/([a-f0-9]{32})\/?$/)?.[1] || '';
   }
+  function selectedMode() { return modes.get(channel) || (nativeSupported ? 'native' : 'simple'); }
   function create() {
     host = document.createElement('div'); host.id = 'chzzk-anonymous-reader';
     host.style.cssText = 'position:fixed;inset:0;z-index:10000;pointer-events:none;';
     root = host.attachShadow({mode: 'open'});
     const style = document.createElement('style');
-    style.textContent = `:host{all:initial}*{box-sizing:border-box}button{font:600 13px system-ui,sans-serif;cursor:pointer}#toggle{position:fixed;right:20px;bottom:20px;pointer-events:auto;border:1px solid #346c5e;border-radius:24px;padding:12px 17px;color:#00ffa3;background:#182420;box-shadow:0 3px 18px #0007}#panel{position:fixed;pointer-events:auto;overflow:hidden;border:1px solid #303239;background:#141517;border-radius:8px;box-shadow:0 4px 24px #0005;display:flex;flex-direction:column}#bar{height:38px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 10px 0 14px;background:#1d1f22;color:#e6e8eb;font:600 12px system-ui,sans-serif}#bar button{background:transparent;border:0;color:#c4c8ce;padding:6px}iframe{border:0;width:100%;flex:1;min-height:0}[hidden]{display:none!important}`;
+    style.textContent = `:host{all:initial}*{box-sizing:border-box}button,select{font:600 12px system-ui,sans-serif;cursor:pointer}#toggle{position:fixed;right:20px;bottom:20px;pointer-events:auto;border:1px solid #346c5e;border-radius:24px;padding:12px 17px;color:#00ffa3;background:#182420;box-shadow:0 3px 18px #0007}#panel{position:fixed;pointer-events:auto;overflow:hidden;border:1px solid #303239;background:#141517;border-radius:8px;box-shadow:0 4px 24px #0005;display:flex;flex-direction:column}#bar{height:40px;gap:8px;flex:none;display:flex;align-items:center;padding:0 8px 0 12px;background:#1d1f22;color:#e6e8eb;font:600 12px system-ui,sans-serif}#bar span{white-space:nowrap}#mode{min-width:0;flex:1;color:#00e596;background:#202a25;border:1px solid #3b5347;border-radius:5px;padding:4px}#bar button{white-space:nowrap;background:transparent;border:0;color:#c4c8ce;padding:6px}button:focus-visible,select:focus-visible{outline:2px solid #00e596;outline-offset:1px}iframe{border:0;width:100%;flex:1;min-height:0;background:#141517}[hidden]{display:none!important}`;
     panel = document.createElement('section'); panel.id = 'panel'; panel.hidden = true;
-    panel.setAttribute('aria-label', '치지직 익명 읽기 전용 채팅');
+    panel.setAttribute('aria-label', '치지직 익명 채팅');
     const bar = document.createElement('div'); bar.id = 'bar';
-    const title = document.createElement('span'); title.textContent = '익명 채팅 뷰어';
+    const title = document.createElement('span'); title.textContent = '익명 채팅';
+    title.title = '메인 로그인은 유지하고, 이 창의 공개 채팅만 익명으로 봅니다.';
+    select = document.createElement('select'); select.id = 'mode';
+    select.setAttribute('aria-label', '채팅 표시 방식');
+    for (const [value, text] of [['native', '기본 채팅'], ['simple', '간단 채팅']]) {
+      const option = document.createElement('option'); option.value = value; option.textContent = text;
+      if (value === 'native') option.disabled = !nativeSupported;
+      select.append(option);
+    }
+    select.title = nativeSupported ? '기본 채팅: 닉네임 정보 카드 등 치지직 원래 UI. 문제 시 간단 채팅으로 전환하세요.' : '이 브라우저는 익명 iframe을 지원하지 않아 간단 채팅을 사용합니다.';
+    select.addEventListener('change', () => { modes.set(channel, select.value); update(); });
     const close = document.createElement('button'); close.textContent = '원래 채팅'; close.title = '익명 연결을 종료하고 원래 채팅창 보기';
     close.addEventListener('click', () => { choices.set(channel, false); update(); });
-    bar.append(title, close); panel.append(bar);
+    bar.append(title, select, close); panel.append(bar);
     button = document.createElement('button'); button.id = 'toggle'; button.textContent = '익명 채팅 보기';
     button.title = '로그인은 유지하고 공개 채팅만 익명으로 읽기';
     button.addEventListener('click', () => { choices.set(channel, true); update(); });
@@ -41,27 +55,46 @@
       Object.assign(panel.style, {left: `${Math.max(12, innerWidth - width - 12)}px`, top: '76px', width: `${width}px`, height: `${height}px`});
     }
   }
+  function removeFrame() { frame?.remove(); frame = null; frameMode = ''; }
   function update() {
     const next = channelFromURL();
-    if (!next) { host?.remove(); host = root = panel = button = frame = null; channel = ''; return; }
-    if (next !== channel) { frame?.remove(); frame = null; channel = next; }
-    if (!host?.isConnected) create();
+    if (!next) { removeFrame(); host?.remove(); host = root = panel = button = select = null; channel = ''; return; }
+    if (next !== channel) { removeFrame(); channel = next; }
+    if (!host?.isConnected) { removeFrame(); create(); }
     aside = findChat();
     const restricted = !!aside && /활동 제한|채팅에 참여할 수 없/.test(aside.textContent);
     const enabled = choices.has(channel) ? choices.get(channel) : restricted;
+    const mode = selectedMode(); select.value = mode;
     panel.hidden = !enabled; button.hidden = enabled;
+    if (frame && (!enabled || frameMode !== mode)) removeFrame();
     if (enabled && !frame) {
-      frame = document.createElement('iframe'); frame.title = '익명 공개 채팅 · 읽기 전용';
-      frame.referrerPolicy = 'no-referrer';
-      frame.src = chrome.runtime.getURL('viewer.html') + '?channel=' + channel;
-      panel.append(frame);
-    } else if (!enabled && frame) { frame.remove(); frame = null; }
+      frame = document.createElement('iframe'); frame.referrerPolicy = 'no-referrer';
+      if (mode === 'native') {
+        // Set before src and DOM insertion. A regular iframe would reuse the banned login.
+        // Embed directly below chzzk.naver.com, not inside an extension-origin iframe:
+        // CHZZK's frame-ancestors policy permits its own origin, not chrome-extension://.
+        frame.credentialless = true;
+        frame.title = '치지직 기본 채팅 · 익명';
+        frame.src = `https://chzzk.naver.com/live/${channel}/chat`;
+      } else {
+        frame.title = '익명 간단 채팅 · 읽기 전용';
+        frame.src = chrome.runtime.getURL('viewer.html') + '?channel=' + channel;
+      }
+      frameMode = mode; panel.append(frame);
+    }
     layout();
   }
   const observer = new MutationObserver(() => { clearTimeout(timer); timer = setTimeout(update, 150); });
   observer.observe(document.documentElement, {childList: true, subtree: true});
   window.addEventListener('resize', layout, {passive: true});
   document.addEventListener('fullscreenchange', layout);
-  setInterval(update, 1200); // Also handles SPA route changes and chat folding.
+  const interval = setInterval(update, 1200);
+  lifecycle.dispose = () => {
+    observer.disconnect(); clearTimeout(timer); clearInterval(interval);
+    window.removeEventListener('resize', layout);
+    document.removeEventListener('fullscreenchange', layout);
+    removeFrame(); host?.remove();
+    delete globalThis.__chzzkAnonymousReader;
+  };
   update();
 })();
