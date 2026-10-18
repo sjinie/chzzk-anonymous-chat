@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "치지직 익명 채팅 뷰어",
+  "version": "1.0.0",
+  "minimum_chrome_version": "120",
+  "description": "로그인은 그대로, 공개 채팅만 익명으로 읽습니다. 활동 제한 안내 감지 시 읽기 전용 채팅창을 표시합니다.",
+  "permissions": ["declarativeNetRequestWithHostAccess"],
+  "host_permissions": [
+    "https://api.chzzk.naver.com/*",
+    "https://comm-api.game.naver.com/*",
+    "wss://*.chat.naver.com/*"
+  ],
+  "background": {"service_worker": "background.js", "type": "module"},
+  "content_scripts": [{
+    "matches": ["https://chzzk.naver.com/*"],
+    "js": ["content.js"],
+    "run_at": "document_idle"
+  }],
+  "web_accessible_resources": [{
+    "resources": ["viewer.html", "viewer.css", "viewer.js", "chat-client.mjs"],
+    "matches": ["https://chzzk.naver.com/*"]
+  }],
+  "content_security_policy": {
+    "extension_pages": "default-src 'self'; script-src 'self'; style-src 'self'; img-src https://ssl.pstatic.net https://nng-phinf.pstatic.net; connect-src https://api.chzzk.naver.com https://comm-api.game.naver.com wss://*.chat.naver.com; object-src 'none'; base-uri 'none'"
+  }
+}

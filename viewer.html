@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>익명 채팅 · 읽기 전용</title><link rel="stylesheet" href="viewer.css"></head>
+<body>
+  <header><div class="heading">공개 채팅 <span>READ ONLY</span></div><div id="status" role="status">연결 준비 중…</div></header>
+  <nav aria-label="채팅 도구"><button id="reconnect" title="익명 채팅 다시 연결">재연결</button><button id="smaller" aria-label="글자 작게">가−</button><button id="larger" aria-label="글자 크게">가+</button><button id="pause" aria-pressed="false">일시정지</button></nav>
+  <div id="notice" hidden></div>
+  <div id="buffer" role="status" hidden></div>
+  <main id="messages" aria-label="공개 채팅 메시지"><p id="empty">공개 채팅을 불러오고 있습니다.</p></main>
+  <button id="latest" hidden>최신 채팅으로 이동</button>
+  <footer>계정 로그인 유지 · 익명 수신 전용<br>메시지 전송과 제한 해제 기능은 없습니다.</footer>
+  <script src="viewer.js" type="module"></script>
+</body></html>
